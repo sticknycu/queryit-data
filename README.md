@@ -1,2 +1,2 @@
 # queryit-data
-Script to automatically populate database of queryit-core-backend
+Script that automatically populate database of queryit-core-backend
