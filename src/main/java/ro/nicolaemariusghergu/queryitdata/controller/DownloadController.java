@@ -1,6 +1,7 @@
 package ro.nicolaemariusghergu.queryitdata.controller;
 
 import lombok.extern.slf4j.Slf4j;
+import org.jeasy.random.randomizers.range.IntegerRangeRandomizer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.configurationprocessor.json.JSONArray;
 import org.springframework.boot.configurationprocessor.json.JSONException;
@@ -10,8 +11,12 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import ro.nicolaemariusghergu.queryitdata.model.Category;
+import ro.nicolaemariusghergu.queryitdata.model.Manufacturer;
+import ro.nicolaemariusghergu.queryitdata.model.Product;
 
 import java.io.*;
+import java.math.BigDecimal;
 import java.net.URI;
 import java.net.URL;
 import java.net.http.HttpClient;
@@ -19,6 +24,10 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.channels.Channels;
 import java.nio.channels.ReadableByteChannel;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
 @Slf4j
 @RestController
@@ -44,9 +53,17 @@ public class DownloadController {
     private String HTTP_MEGA_IMAGE_DIRECTORY_PHOTOS;
 
     @GetMapping("/mega-image")
-    public ResponseEntity<String> getProducts() throws IOException, InterruptedException, JSONException {
+    public ResponseEntity<List<Product>> getProducts() throws IOException, InterruptedException, JSONException {
         HttpClient client = HttpClient.newHttpClient();
         HttpResponse<String> response = null;
+        List<Product> productList = new ArrayList<>();
+
+        Set<String> manufacturersName = new HashSet<>();
+
+        long productId = 0L;
+        long manufacturerId = 0L;
+        long categoryId = 0L;
+
         for (int i = 1; i <= 15; i++) {
             String word;
             if (i >= 10) {
@@ -86,6 +103,10 @@ public class DownloadController {
 
             log.info("Iau toate informatiile din fiecare categorie...");
 
+            Category category = new Category();
+            category.setId(categoryId++);
+            category.setName(categoryName);
+
             log.info("=== Categoria " + categoryName + " ===");
             for (int j = 0; j < jsonArray.length(); j++) {
                 String productName = jsonArray
@@ -93,6 +114,29 @@ public class DownloadController {
                         .getString("name");
 
                 log.info("productName= " + productName);
+
+                String manufacturerName = jsonArray
+                        .getJSONObject(j)
+                        .getString("manufacturerName");
+
+                if (manufacturersName.add(manufacturerName)) {
+                    // atunci creez un nou obiect
+                    Manufacturer manufacturer = new Manufacturer();
+                    manufacturer.setId(manufacturerId++);
+                    manufacturer.setName(manufacturerName);
+                }
+
+                Double price = jsonArray
+                        .getJSONObject(j)
+                        .getJSONObject("price")
+                        .getDouble("value");
+
+                Product product = new Product();
+                product.setId(productId++);
+                product.setName(productName);
+                product.setPrice(BigDecimal.valueOf(price));
+                product.setQuantity(new IntegerRangeRandomizer(1, 50).getRandomValue());
+                product.setCategory(category);
 
                 try {
                     String urlImage = jsonArray
@@ -106,17 +150,21 @@ public class DownloadController {
                     log.info(iconUrl);
                     log.info("\n");
 
-                    performWritingIcons(iconUrl, categoryName, productName, HTTP_MEGA_IMAGE_DIRECTORY, HTTP_MEGA_IMAGE_DIRECTORY_PHOTOS);
+                    String iconPath = performWritingIcons(iconUrl, categoryName, productName, HTTP_MEGA_IMAGE_DIRECTORY, HTTP_MEGA_IMAGE_DIRECTORY_PHOTOS);
+                    log.info("Icon Path: " + iconPath);
+                    product.setIconPath(iconPath);
                 } catch (Exception e) {
                     log.info("N-am gasit url-ul la " + productName);
                 }
+
+                productList.add(product);
 
             }
         }
         if (response.body() == null) {
             return new ResponseEntity<>(HttpStatus.INTERNAL_SERVER_ERROR);
         } else {
-            return new ResponseEntity<>(HttpStatus.OK);
+            return ResponseEntity.ok(productList);
         }
     }
 
@@ -138,7 +186,7 @@ public class DownloadController {
         }
     }
 
-    private void performWritingIcons(String url, String category, String productName, String baseDirectory, String baseDirectoryPhotos) throws IOException {
+    private String performWritingIcons(String url, String category, String productName, String baseDirectory, String baseDirectoryPhotos) throws IOException {
         URL website = new URL(url);
         // I don't want to write the data if already exists
         String fileName = productName + ".jpg";
@@ -160,5 +208,6 @@ public class DownloadController {
                 }
             }
         }
+        return filePath;
     }
 }
