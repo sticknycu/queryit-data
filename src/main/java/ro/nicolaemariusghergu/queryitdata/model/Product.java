@@ -7,8 +7,7 @@ import java.math.BigDecimal;
 @Getter
 @Setter
 @NoArgsConstructor
-@ToString
-@EqualsAndHashCode(callSuper = false)
+@ToString(callSuper = true)
 public class Product extends BaseEntity {
 
     private BigDecimal price;
@@ -20,4 +19,8 @@ public class Product extends BaseEntity {
     private Category category;
 
     private Promotion promotion;
+
+    private MiniMarket miniMarket;
+
+    private Manufacturer manufacturer;
 }

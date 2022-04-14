@@ -29,10 +29,8 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Slf4j
 @Service
@@ -58,17 +56,20 @@ public class MegaImageDownloaderService implements DownloadService {
 
     private static List<Product> availableProducts = new ArrayList<>();
 
+    private static Set<Category> availableCategories = new HashSet<>();
+
+    private static Set<Manufacturer> availableManufacturers = new HashSet<>();
+
+    private static final HttpClient HTTP_CLIENT = HttpClient.newHttpClient();
+    private static HttpResponse<String> HTTP_RESPONSE = null;
+
     @SneakyThrows
     @Override
     public ResponseEntity<List<Product>> getProductsFromMegaImage() {
-        HttpClient client = HttpClient.newHttpClient();
-        HttpResponse<String> response = null;
-        Set<String> manufacturersName = new HashSet<>();
+        long categoryId = 1L;
+        long productId = 1L;
 
-        long productId = 0L;
-        long manufacturerId = 0L;
-        long categoryId = 0L;
-
+        log.info("Extrag informatiile de la fiecare website...");
         for (int i = 1; i <= 15; i++) {
             String word;
             if (i >= 10) {
@@ -85,10 +86,10 @@ public class MegaImageDownloaderService implements DownloadService {
                     .uri(URI.create(dataLink))
                     .build();
 
-            response = client.send(request,
+            HTTP_RESPONSE = HTTP_CLIENT.send(request,
                     HttpResponse.BodyHandlers.ofString());
 
-            JSONObject jsonObject = new JSONObject(response.body());
+            JSONObject jsonObject = new JSONObject(HTTP_RESPONSE.body());
 
             String categoryName = jsonObject.getJSONObject("data")
                     .getJSONObject("categoryProductSearch")
@@ -102,38 +103,30 @@ public class MegaImageDownloaderService implements DownloadService {
                     .toString();
 
             // If already data exists, I don't want to download it again
-            String filePath = performWritingJsons(response.body(), categoryName, HTTP_MEGA_IMAGE_DIRECTORY, HTTP_MEGA_IMAGE_DIRECTORY_JSONS);
+            String filePath = performWritingJsons(HTTP_RESPONSE.body(), categoryName, HTTP_MEGA_IMAGE_DIRECTORY, HTTP_MEGA_IMAGE_DIRECTORY_JSONS);
 
             jsonObject = new JSONObject(Files.readString(new File(filePath).toPath()));
 
             JSONArray jsonArray = jsonObject.getJSONObject("data").getJSONObject("categoryProductSearch").getJSONArray("products");
 
-            log.info("Iau toate informatiile din fiecare categorie...");
-
             Category category = new Category();
             category.setId(categoryId++);
             category.setName(categoryName);
 
+            log.info("Iau toate informatiile din fiecare categorie...");
             log.info("=== Categoria " + categoryName + " ===");
             for (int j = 0; j < jsonArray.length(); j++) {
                 String productName = jsonArray
                         .getJSONObject(j)
                         .getString("name");
 
-                log.info("productName= " + productName);
+                log.info("Am gasit produsul= " + productName);
 
                 String manufacturerName = jsonArray
                         .getJSONObject(j)
                         .getString("manufacturerName");
 
-                if (manufacturersName.add(manufacturerName)) {
-                    // atunci creez un nou obiect
-                    Manufacturer manufacturer = new Manufacturer();
-                    manufacturer.setId(manufacturerId++);
-                    manufacturer.setName(manufacturerName);
-                }
-
-                Double price = jsonArray
+                double price = jsonArray
                         .getJSONObject(j)
                         .getJSONObject("price")
                         .getDouble("value");
@@ -141,9 +134,20 @@ public class MegaImageDownloaderService implements DownloadService {
                 Product product = new Product();
                 product.setId(productId++);
                 product.setName(productName);
-                product.setPrice(BigDecimal.valueOf(price));
                 product.setQuantity(new IntegerRangeRandomizer(1, 50).getRandomValue());
                 product.setCategory(category);
+                product.setPrice(BigDecimal.valueOf(price));
+
+                Manufacturer temporaryManufacturer = new Manufacturer();
+                temporaryManufacturer.setName(manufacturerName);
+
+                availableManufacturers.forEach(listManufacturer -> {
+                    if (listManufacturer.getName().equals(temporaryManufacturer.getName())) {
+                        temporaryManufacturer.setId(listManufacturer.getId());
+                    }
+                });
+
+                product.setManufacturer(temporaryManufacturer);
 
                 try {
                     String urlImage = jsonArray
@@ -173,15 +177,36 @@ public class MegaImageDownloaderService implements DownloadService {
             }
         }
 
-        log.info("Randomizing table Promotion....");
+        if (HTTP_RESPONSE.body() == null) {
+            return new ResponseEntity<>(HttpStatus.INTERNAL_SERVER_ERROR);
+        } else {
+            return ResponseEntity.ok(availableProducts);
+        }
+    }
+
+    @Override
+    public ResponseEntity<List<Product>> getProductsFromMegaImageByCategory(Long categoryId) {
+        if (availableProducts.isEmpty()) {
+            getProductsFromMegaImage();
+        }
+        return ResponseEntity.ok(availableProducts.stream()
+                .filter(p -> p.getCategory().getId() == categoryId)
+                .toList());
+    }
+
+    @Override
+    public ResponseEntity<Set<Promotion>> getPromotionsFromMegaImage() {
+        log.info("Creez promotii aleatoare pentru tabela de promotii...");
+
         int maxValue = new IntegerRangeRandomizer(1, 20).getRandomValue();
-        for (int promotionId = 0; promotionId < maxValue; promotionId++) {
+        for (int promotionId = 1; promotionId <= maxValue; promotionId++) {
             Promotion promotion = new Promotion();
             promotion.setId((long) promotionId);
 
             int quantityNeeded = new IntegerRangeRandomizer(1, 3).getRandomValue();
 
             Product neededProduct = findAvailableProductFromRandomizedIntegerId();
+            log.info("NeededProduct= " + neededProduct);
             availableProducts.forEach(prd -> {
                 if (neededProduct.getId().equals(prd.getId())) {
                     neededProduct.setName(prd.getName());
@@ -196,7 +221,6 @@ public class MegaImageDownloaderService implements DownloadService {
                     neededProduct.getName() +
                     " primesti inca unul gratuit!";
 
-            promotion.setProductId(neededProduct);
             promotion.setDescription(description);
             promotion.setName(neededProduct.getName());
 
@@ -218,31 +242,141 @@ public class MegaImageDownloaderService implements DownloadService {
             ZoneOffset zoneOffset = zoneId.getRules().getOffset(instant);
             promotion.setExpireDate(localDateTime.toInstant(zoneOffset).toEpochMilli());
 
-            log.info(String.valueOf(promotion));
-
-            availableProducts.forEach(product -> {
-                if (product.getId().equals(promotion.getProductId().getId())) {
-                    int index = availableProducts.indexOf(product);
-                    Product p = product;
-                    p.setPromotion(promotion);
-                    availableProducts.set(index, p);
-                }
-            });
+            promotionsAvailable.add(promotion);
+            log.info("Promotion= " + promotion + " a fost adaugata in lista!");
         }
-
-        if (response.body() == null) {
-            return new ResponseEntity<>(HttpStatus.INTERNAL_SERVER_ERROR);
-        } else {
-            return ResponseEntity.ok(availableProducts);
-        }
+        return ResponseEntity.ok(promotionsAvailable);
     }
 
     @Override
-    public ResponseEntity<List<Product>> getProductsFromMegaImageByCategory(Long categoryId) {
-        getProductsFromMegaImage();
-        return ResponseEntity.ok(availableProducts.stream()
-                .filter(p -> p.getCategory().getId() == categoryId)
-                .toList());
+    public ResponseEntity<List<Product>> getProductsWithPromotionFromMegaImage() {
+        List<Product> productsWithPromotion = new ArrayList<>();
+        promotionsAvailable.forEach(promotion -> availableProducts.forEach(product -> {
+            if (product.getName().equals(promotion.getName())) {
+                Product p = product;
+                p.setPromotion(promotion);
+                productsWithPromotion.add(p);
+            }
+        }));
+        return ResponseEntity.ok(productsWithPromotion);
+    }
+
+    @SneakyThrows
+    @Override
+    public ResponseEntity<Set<Category>> getCategoriesFromMegaImage() {
+        long categoryId = 1L;
+
+        log.info("Extrag informatiile din fiecare website...");
+        for (int i = 1; i <= 15; i++) {
+            String word;
+            if (i >= 10) {
+                word = "" + i;
+            } else {
+                word = "0" + i;
+            }
+
+            log.info("Avem site-ul numarul " + i);
+            String dataLink = HTTP_BASE_MEGA_IMAGE.replace("--", word);
+            log.info("Site-ul este " + dataLink);
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(dataLink))
+                    .build();
+
+            HTTP_RESPONSE = HTTP_CLIENT.send(request,
+                    HttpResponse.BodyHandlers.ofString());
+
+            JSONObject jsonObject = new JSONObject(HTTP_RESPONSE.body());
+
+            String categoryName = jsonObject.getJSONObject("data")
+                    .getJSONObject("categoryProductSearch")
+                    .getJSONArray("categorySearchTree")
+                    .getJSONObject(0)
+                    .getJSONArray("categoryDataList")
+                    .getJSONObject(0)
+                    .getJSONObject("categoryData")
+                    .getJSONObject("facetData")
+                    .get("name")
+                    .toString();
+
+            log.info("Aflu informatii despre fiecare categorie...");
+
+            Category category = new Category();
+            category.setId(categoryId++);
+            category.setName(categoryName);
+
+            if (availableCategories.add(category)) {
+                log.info("Category= " + category + " a fost adaugata in lista...");
+            } else {
+                log.info("Category= " + category + " deja exista in lista...");
+            }
+        }
+        return ResponseEntity.ok(availableCategories);
+    }
+
+    @SneakyThrows
+    @Override
+    public ResponseEntity<Set<Manufacturer>> getManufacturersFromMegaImage() {
+        Set<String> manufacturersName = new HashSet<>();
+        long manufacturerId = 1L;
+
+        log.info("Extrag informatiile din fiecare website...");
+        for (int i = 1; i <= 15; i++) {
+            String word;
+            if (i >= 10) {
+                word = "" + i;
+            } else {
+                word = "0" + i;
+            }
+
+            log.info("Avem site-ul numarul " + i);
+            String dataLink = HTTP_BASE_MEGA_IMAGE.replace("--", word);
+            log.info("Site-ul este " + dataLink);
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(dataLink))
+                    .build();
+
+            HTTP_RESPONSE = HTTP_CLIENT.send(request,
+                    HttpResponse.BodyHandlers.ofString());
+
+            JSONObject jsonObject = new JSONObject(HTTP_RESPONSE.body());
+
+            String categoryName = jsonObject.getJSONObject("data")
+                    .getJSONObject("categoryProductSearch")
+                    .getJSONArray("categorySearchTree")
+                    .getJSONObject(0)
+                    .getJSONArray("categoryDataList")
+                    .getJSONObject(0)
+                    .getJSONObject("categoryData")
+                    .getJSONObject("facetData")
+                    .get("name")
+                    .toString();
+
+            // If already data exists, I don't want to download it again
+            String filePath = performWritingJsons(HTTP_RESPONSE.body(), categoryName, HTTP_MEGA_IMAGE_DIRECTORY, HTTP_MEGA_IMAGE_DIRECTORY_JSONS);
+
+            jsonObject = new JSONObject(Files.readString(new File(filePath).toPath()));
+
+            JSONArray jsonArray = jsonObject.getJSONObject("data").getJSONObject("categoryProductSearch").getJSONArray("products");
+
+            log.info("Aflu informatiile de la fiecare categorie...");
+            for (int j = 0; j < jsonArray.length(); j++) {
+                String manufacturerName = jsonArray
+                        .getJSONObject(j)
+                        .getString("manufacturerName");
+
+                if (manufacturersName.add(manufacturerName)) {
+                    Manufacturer manufacturer = new Manufacturer();
+                    manufacturer.setId(manufacturerId++);
+                    manufacturer.setName(manufacturerName);
+
+                    availableManufacturers.add(manufacturer);
+                }
+            }
+        }
+
+        return ResponseEntity.ok(availableManufacturers);
     }
 
     private static final int MAX_PRODUCT_ID = 290;
@@ -251,15 +385,33 @@ public class MegaImageDownloaderService implements DownloadService {
 
     private Product findAvailableProductFromRandomizedIntegerId() {
         int productRandomizedId = new IntegerRangeRandomizer(0, MAX_PRODUCT_ID).getRandomValue();
-        Product product = new Product();
-        product.setId((long) productRandomizedId);
-        Promotion promotion = new Promotion();
-        promotion.setProductId(product);
-        if (!promotionsAvailable.add(promotion)) {
-            return product;
-        } else {
-            return findAvailableProductFromRandomizedIntegerId();
+
+        Optional<Product> productSearched = Optional.empty();
+        AtomicBoolean exists = new AtomicBoolean(false);
+        for (Product availableProduct : availableProducts) {
+            if (availableProduct.getId() == productRandomizedId) {
+                if (promotionsAvailable.isEmpty()) {
+                    return availableProduct;
+                } else {
+                    promotionsAvailable.forEach(promotion -> {
+                        // daca din toate produsele am gasit id-ul generat aleatoriu
+                        // si produsul exista in lista de promotii
+                        if (availableProduct.getName().equals(promotion.getName())) {
+                            // atunci setez ca exista
+                            exists.set(true);
+                        }
+                    });
+                    if (exists.get()) {
+                        return findAvailableProductFromRandomizedIntegerId();
+                    } else {
+                        productSearched = Optional.of(availableProduct);
+                    }
+                }
+            }
         }
+        // produsul exista in lista de promotii si caut altul
+        // sau produsul nu exista in lista de promotii si returnez produsul
+        return productSearched.orElseGet(this::findAvailableProductFromRandomizedIntegerId);
     }
 
     private String performWritingJsons(String responseBody, String category, String baseDirectory, String baseDirectoryJsons) throws IOException {
