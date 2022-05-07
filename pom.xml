@@ -64,6 +64,42 @@
                     </excludes>
                 </configuration>
             </plugin>
+            <plugin>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>1.8</version>
+                <configuration>
+                    <tasks>
+                        <scp todir="${ssh.queryit_data.directory}"
+                             port="${ssh.port}" trust="true" keyfile="${ssh.private_key.localPath}"
+                             failonerror="false" verbose="true">
+                            <fileset dir="src/main/resources">
+                                <exclude name="application.properties"/>
+                            </fileset>
+                        </scp>
+                    </tasks>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>scp</id>
+                        <phase>integration-test</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <dependencies>
+                    <dependency>
+                        <groupId>com.jcraft</groupId>
+                        <artifactId>jsch</artifactId>
+                        <version>0.1.53</version>
+                    </dependency>
+                    <dependency>
+                        <groupId>org.apache.ant</groupId>
+                        <artifactId>ant-jsch</artifactId>
+                        <version>1.9.6</version>
+                    </dependency>
+                </dependencies>
+            </plugin>
         </plugins>
     </build>
 
